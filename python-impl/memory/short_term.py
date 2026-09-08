@@ -65,39 +65,48 @@ class ShortTermMemory:
         r = await self._get_redis()
 
         if r is not None:
-            key = self._session_key(session_id)
-            await r.rpush(key, json.dumps(message, ensure_ascii=False))
-            await r.ltrim(key, -self.max_turns, -1)
-            await r.expire(key, self.ttl_seconds)
-        else:
-            if session_id not in self._fallback_store:
-                self._fallback_store[session_id] = []
-            self._fallback_store[session_id].append(message)
-            if len(self._fallback_store[session_id]) > self.max_turns:
-                self._fallback_store[session_id] = self._fallback_store[session_id][-self.max_turns:]
+            try:
+                key = self._session_key(session_id)
+                await r.rpush(key, json.dumps(message, ensure_ascii=False))
+                await r.ltrim(key, -self.max_turns, -1)
+                await r.expire(key, self.ttl_seconds)
+                return
+            except Exception:
+                self._redis = None
+
+        if session_id not in self._fallback_store:
+            self._fallback_store[session_id] = []
+        self._fallback_store[session_id].append(message)
+        if len(self._fallback_store[session_id]) > self.max_turns:
+            self._fallback_store[session_id] = self._fallback_store[session_id][-self.max_turns:]
 
     async def get_history(self, session_id: str, last_n: Optional[int] = None) -> list[dict]:
         """获取对话历史"""
         r = await self._get_redis()
 
         if r is not None:
-            key = self._session_key(session_id)
-            n = last_n or self.max_turns
-            raw = await r.lrange(key, -n, -1)
-            return [json.loads(item) for item in raw]
-        else:
-            history = self._fallback_store.get(session_id, [])
-            if last_n:
-                return history[-last_n:]
-            return list(history)
+            try:
+                key = self._session_key(session_id)
+                n = last_n or self.max_turns
+                raw = await r.lrange(key, -n, -1)
+                return [json.loads(item) for item in raw]
+            except Exception:
+                self._redis = None
+
+        history = self._fallback_store.get(session_id, [])
+        if last_n:
+            return history[-last_n:]
+        return list(history)
 
     async def clear(self, session_id: str) -> None:
         """清除指定session的短期记忆"""
         r = await self._get_redis()
         if r is not None:
-            await r.delete(self._session_key(session_id))
-        else:
-            self._fallback_store.pop(session_id, None)
+            try:
+                await r.delete(self._session_key(session_id))
+            except Exception:
+                self._redis = None
+        self._fallback_store.pop(session_id, None)
 
     async def get_context_window(self, session_id: str, max_tokens: int = 4000) -> str:
         """获取适配上下文窗口大小的对话历史文本"""

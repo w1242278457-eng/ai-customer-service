@@ -9,9 +9,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from llm_client import OpenAICompatibleChatModel as ChatOpenAI
 
 from tracing.otel_config import trace_agent_call
+from trace_utils import add_trace
 
 
 @dataclass
@@ -182,12 +183,13 @@ class ComplianceCheckerAgent:
     @trace_agent_call("compliance_process")
     async def process(self, state: dict[str, Any]) -> dict[str, Any]:
         sub_results = state.get("sub_results", {})
+        trace = add_trace(state, "compliance_checker", "thinking", "Checking privacy, safety, and policy risks")
 
         content_to_check = "\n".join(
             result for result in sub_results.values() if isinstance(result, str)
         )
         if not content_to_check.strip():
-            return {**state, "compliance_passed": True}
+            return {**state, "compliance_passed": True, "trace": add_trace({**state, "trace": trace}, "compliance_checker", "complete", "Safety check passed")}
 
         compliance_result = await self.full_check(content_to_check)
         if not compliance_result.passed:
@@ -206,4 +208,5 @@ class ComplianceCheckerAgent:
                     "violations": compliance_result.violations,
                 },
             },
+            "trace": add_trace({**state, "trace": trace}, "compliance_checker", "complete", "Safety check completed"),
         }

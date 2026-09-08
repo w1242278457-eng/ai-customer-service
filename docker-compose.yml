@@ -21,9 +21,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      - MODEL_NAME=${MODEL_NAME:-gpt-4o}
+      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      - MODEL_NAME=${MODEL_NAME:-deepseek-chat}
       - REDIS_URL=redis://redis:6379/0
       - OTEL_SERVICE_NAME=smart-cs-python
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317

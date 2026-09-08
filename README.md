@@ -1,5 +1,7 @@
 # Campus Customer Service Multi-Agent
 
+> 完整的项目架构、启动步骤、前后端实现、Agent 协作、记忆/RAG/MCP、轨迹弹窗、排错和生产化建议，请阅读根目录的 [PROJECT_GUIDE.md](PROJECT_GUIDE.md)。
+
 面向校园场景的智能客服多 Agent 系统，适用于招生咨询、教务问答、校园卡服务、宿舍报修、奖助学金说明、校园生活指引等业务。
 
 ## 项目定位
@@ -47,10 +49,13 @@ python-impl/
 ```bash
 cd python-impl
 pip install -r requirements.txt
+copy .env.example .env       # Windows; then fill DEEPSEEK_API_KEY
 python -m api.main
 ```
 
-默认启动后接口地址为 `http://localhost:8000`。
+默认启动后访问 `http://localhost:8000` 使用内置 Web 聊天界面，`http://localhost:8000/docs` 查看 API 文档。
+
+模型通过 OpenAI-compatible HTTP 协议接入，默认使用 DeepSeek。也可以设置 `LLM_PROVIDER`、`LLM_BASE_URL`、`MODEL_NAME` 和对应的 API Key 接入其他兼容服务。未配置 Key 时会进入本地演示模式，服务仍可启动。
 
 ## 已完成的校园化改造
 

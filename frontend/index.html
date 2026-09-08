@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>校园智能客服</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, system-ui, -apple-system, "Microsoft YaHei", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #f3f6fa; color: #142033; }
+    header { background: #123b5d; color: #fff; padding: 22px max(20px, calc((100% - 1080px) / 2)); }
+    header h1 { margin: 0 0 5px; font-size: 23px; }
+    header p { margin: 0; opacity: .8; font-size: 14px; }
+    main { width: min(1080px, calc(100% - 32px)); margin: 24px auto; display: grid; grid-template-columns: 260px 1fr; gap: 18px; }
+    aside, section { background: #fff; border: 1px solid #dce4ec; border-radius: 8px; }
+    aside { padding: 18px; height: fit-content; }
+    aside h2 { margin: 0 0 16px; font-size: 15px; }
+    .suggestion { display: block; width: 100%; border: 1px solid #dce4ec; background: #f8fafc; color: #24425c; border-radius: 6px; padding: 10px; margin: 8px 0; text-align: left; cursor: pointer; }
+    .suggestion:hover { border-color: #2d7ab3; background: #eef7fd; }
+    .status { margin-top: 20px; padding-top: 14px; border-top: 1px solid #e7edf2; font-size: 12px; color: #637386; line-height: 1.7; }
+    section { min-height: 600px; display: flex; flex-direction: column; position: relative; }
+    .chat-toolbar { min-height: 48px; border-bottom: 1px solid #e1e8ef; display: flex; align-items: center; justify-content: space-between; padding: 0 14px 0 20px; color: #637386; font-size: 13px; }
+    .trace-toggle { border: 1px solid #cbd7e2; background: #fff; color: #24425c; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+    .trace-toggle[aria-pressed="true"] { border-color: #1877b7; color: #1877b7; background: #eef7fd; }
+    .trace-panel { position: absolute; top: 56px; right: 14px; z-index: 2; width: min(330px, calc(100% - 28px)); max-height: 330px; overflow: auto; background: #fff; border: 1px solid #bfd0df; border-radius: 8px; box-shadow: 0 8px 24px rgba(20, 45, 70, .14); padding: 12px; }
+    .trace-panel[hidden] { display: none; }
+    .trace-title { margin: 0 0 8px; font-size: 13px; color: #24425c; }
+    .trace-item { display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding: 8px 0; border-top: 1px solid #edf1f5; font-size: 12px; line-height: 1.45; }
+    .trace-item { animation: traceIn .3s ease both; }
+    @keyframes traceIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    .trace-dot { width: 8px; height: 8px; margin: 5px 0 0 4px; border-radius: 50%; background: #2d7ab3; }
+    .trace-agent { color: #24425c; font-weight: 600; }
+    .trace-detail { color: #637386; }
+    #messages { flex: 1; padding: 20px; overflow: auto; }
+    .message { max-width: 84%; margin: 0 0 15px; padding: 12px 14px; border-radius: 8px; white-space: pre-wrap; line-height: 1.6; font-size: 14px; }
+    .assistant { background: #edf4f8; margin-right: auto; }
+    .user { background: #d8ecfa; margin-left: auto; }
+    .composer { border-top: 1px solid #e1e8ef; display: flex; gap: 10px; padding: 14px; }
+    textarea { resize: vertical; min-height: 46px; max-height: 130px; flex: 1; border: 1px solid #cbd7e2; border-radius: 6px; padding: 11px; font: inherit; }
+    button.send { border: 0; border-radius: 6px; padding: 0 20px; background: #1877b7; color: #fff; font-weight: 600; cursor: pointer; }
+    button.send:disabled { opacity: .5; cursor: wait; }
+    @media (max-width: 720px) { main { grid-template-columns: 1fr; } aside { order: 2; } section { min-height: 70vh; } }
+  </style>
+</head>
+<body>
+  <header><h1>校园智能客服</h1><p>DeepSeek 多 Agent 服务平台</p></header>
+  <main>
+    <aside>
+      <h2>常用服务</h2>
+      <button class="suggestion">宿舍漏水，如何提交报修？</button>
+      <button class="suggestion">校园卡丢失后应该怎么办？</button>
+      <button class="suggestion">奖学金申请需要哪些材料？</button>
+      <button class="suggestion">本学期选课什么时候开始？</button>
+      <div class="status" id="status">正在读取服务状态...</div>
+    </aside>
+    <section>
+      <div class="chat-toolbar"><span>在线服务</span><button class="trace-toggle" id="traceToggle" type="button" aria-pressed="false">显示思考轨迹</button></div>
+      <div class="trace-panel" id="tracePanel" hidden><p class="trace-title">模型与 Agent 执行轨迹</p><div id="traceList"></div></div>
+      <div id="messages"><div class="message assistant">你好，我是校园智能客服。可以咨询校务知识，也可以提交宿舍报修、校园卡等服务工单。</div></div>
+      <form class="composer" id="composer"><textarea id="input" placeholder="输入你的问题，按 Ctrl+Enter 发送"></textarea><button class="send" type="submit">发送</button></form>
+    </section>
+  </main>
+  <script>
+    const messages = document.querySelector('#messages'), input = document.querySelector('#input'), form = document.querySelector('#composer'), send = document.querySelector('.send');
+    const traceToggle = document.querySelector('#traceToggle'), tracePanel = document.querySelector('#tracePanel'), traceList = document.querySelector('#traceList');
+    let sessionId = null;
+    const agentLabels = { supervisor: 'Supervisor', general_chat: '通用对话 Agent', knowledge_rag: '知识库 RAG Agent', ticket_handler: '工单 Agent', compliance_checker: '合规检查 Agent' };
+    let traceEnabled = localStorage.getItem('traceEnabled') === 'true';
+    function setTraceEnabled(enabled) { traceEnabled = enabled; localStorage.setItem('traceEnabled', enabled); traceToggle.setAttribute('aria-pressed', String(enabled)); traceToggle.textContent = enabled ? '隐藏思考轨迹' : '显示思考轨迹'; tracePanel.hidden = !enabled; }
+    function renderTrace(trace) { if (!traceEnabled) return; traceList.innerHTML = ''; (trace || []).forEach(item => { const row = document.createElement('div'); row.className = 'trace-item'; row.innerHTML = `<span class="trace-dot"></span><div><div class="trace-agent">${agentLabels[item.agent] || item.agent}</div><div class="trace-detail">${item.detail}</div></div>`; traceList.appendChild(row); }); tracePanel.hidden = false; }
+    traceToggle.addEventListener('click', () => setTraceEnabled(!traceEnabled)); setTraceEnabled(traceEnabled);
+    function addMessage(text, role) { const el = document.createElement('div'); el.className = `message ${role}`; el.textContent = text; messages.appendChild(el); messages.scrollTop = messages.scrollHeight; }
+    async function submit(text) {
+      text = (text || input.value).trim(); if (!text || send.disabled) return;
+      input.value = ''; addMessage(text, 'user'); send.disabled = true; send.textContent = '处理中...';
+      if (traceEnabled) renderTrace([{agent: 'supervisor', detail: '正在分析请求并选择 Agent'}]);
+      try { const response = await fetch('/api/chat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message: text, session_id: sessionId}) }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || '请求失败'); sessionId = data.session_id; renderTrace(data.trace); addMessage(data.response, 'assistant'); }
+      catch (error) { addMessage(`暂时无法完成请求：${error.message}`, 'assistant'); }
+      finally { send.disabled = false; send.textContent = '发送'; input.focus(); }
+    }
+    form.addEventListener('submit', event => { event.preventDefault(); submit(); });
+    input.addEventListener('keydown', event => { if (event.key === 'Enter' && event.ctrlKey) { event.preventDefault(); submit(); } });
+    document.querySelectorAll('.suggestion').forEach(button => button.addEventListener('click', () => submit(button.textContent)));
+    fetch('/api/config').then(r => r.json()).then(config => { document.querySelector('#status').textContent = `${config.provider} / ${config.model}\n${config.configured ? '已配置 API Key' : '本地演示模式，待配置 API Key'}`; }).catch(() => { document.querySelector('#status').textContent = '服务状态读取失败'; });
+  </script>
+  <script>
+    // Progressive timeline presentation. The API still returns the authoritative trace.
+    const modelLabel = '模型';
+    const pendingTimeline = [
+      { agent: 'supervisor', detail: '正在读取问题与会话上下文' },
+      { agent: 'supervisor', detail: '正在判断任务类型并选择处理 Agent' },
+      { agent: 'model', detail: '正在准备 DeepSeek 模型请求' }
+    ];
+    let pendingTimer = null;
+    let pendingIndex = 0;
+    const detailLabels = {
+      'Analyzing the request and selecting an agent': '正在分析请求并选择 Agent',
+      'Switched to general_chat': '已切换到通用对话 Agent',
+      'Switched to knowledge_rag': '已切换到知识库 RAG Agent',
+      'Switched to ticket_handler': '已切换到工单 Agent',
+      'Searching the campus knowledge base': '正在检索校园知识库',
+      'Retrieved 1 relevant documents': '已找到相关知识文档',
+      'Extracting ticket type, priority, and details': '正在提取工单类型、优先级和详情',
+      'Ticket workflow completed': '工单处理流程完成',
+      'Generating a direct answer with the configured model': '正在调用配置的模型生成回答',
+      'General answer generated': '通用回答生成完成',
+      'Checking privacy, safety, and policy risks': '正在检查隐私、安全和政策风险',
+      'Safety check completed': '安全检查完成',
+      'Response ready': '最终回答准备完成'
+    };
+    function traceLabel(agent) { return agentLabels[agent] || (agent === 'model' ? modelLabel : agent); }
+    function traceDetail(detail) {
+      if (detailLabels[detail]) return detailLabels[detail];
+      const match = String(detail).match(/^Retrieved (\d+) relevant documents$/);
+      return match ? `已找到 ${match[1]} 篇相关知识文档` : detail;
+    }
+    function clearTraceList() { traceList.innerHTML = ''; }
+    function appendTraceItem(item) {
+      const row = document.createElement('div'); row.className = 'trace-item';
+      const dot = document.createElement('span'); dot.className = 'trace-dot';
+      const body = document.createElement('div');
+      const agent = document.createElement('div'); agent.className = 'trace-agent'; agent.textContent = traceLabel(item.agent);
+      const detail = document.createElement('div'); detail.className = 'trace-detail'; detail.textContent = traceDetail(item.detail);
+      body.append(agent, detail); row.append(dot, body); traceList.appendChild(row); tracePanel.scrollTop = tracePanel.scrollHeight;
+    }
+    function beginPendingTimeline() {
+      if (!traceEnabled) return;
+      tracePanel.hidden = false; clearTraceList(); pendingIndex = 0;
+      appendTraceItem(pendingTimeline[pendingIndex++]);
+      pendingTimer = setInterval(() => { if (pendingIndex < pendingTimeline.length) appendTraceItem(pendingTimeline[pendingIndex++]); }, 650);
+    }
+    function stopPendingTimeline() { if (pendingTimer) { clearInterval(pendingTimer); pendingTimer = null; } }
+    function playAuthoritativeTrace(trace) {
+      stopPendingTimeline();
+      if (!traceEnabled) return Promise.resolve();
+      clearTraceList(); tracePanel.hidden = false;
+      return new Promise(resolve => {
+        let index = 0;
+        const next = () => { if (index >= (trace || []).length) return resolve(); appendTraceItem(trace[index++]); setTimeout(next, 380); };
+        next();
+      });
+    }
+    async function progressiveSubmit(text) {
+      text = (text || input.value).trim(); if (!text || send.disabled) return;
+      input.value = ''; addMessage(text, 'user'); send.disabled = true; send.textContent = '处理中...'; beginPendingTimeline();
+      try {
+        const response = await fetch('/api/chat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message: text, session_id: sessionId}) });
+        const data = await response.json(); if (!response.ok) throw new Error(data.detail || '请求失败'); sessionId = data.session_id;
+        await playAuthoritativeTrace(data.trace); addMessage(data.response, 'assistant');
+      } catch (error) { stopPendingTimeline(); addMessage(`暂时无法完成请求：${error.message}`, 'assistant'); }
+      finally { send.disabled = false; send.textContent = '发送'; input.focus(); }
+    }
+    form.addEventListener('submit', event => { event.preventDefault(); event.stopImmediatePropagation(); progressiveSubmit(); }, true);
+    document.querySelectorAll('.suggestion').forEach(button => button.addEventListener('click', event => { event.preventDefault(); event.stopImmediatePropagation(); progressiveSubmit(button.textContent); }, true));
+  </script>
+</body>
+</html>

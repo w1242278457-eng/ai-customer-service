@@ -10,9 +10,10 @@ from enum import Enum
 from typing import Any, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from llm_client import OpenAICompatibleChatModel as ChatOpenAI
 
 from tracing.otel_config import trace_agent_call
+from trace_utils import add_trace
 
 
 class TicketStatus(str, Enum):
@@ -175,6 +176,7 @@ class TicketHandlerAgent:
             return state
 
         last_message = messages[-1].content
+        trace = add_trace(state, "ticket_handler", "thinking", "Extracting ticket type, priority, and details")
         ticket_info = await self.analyze_request(last_message)
         action = ticket_info.get("action", "create")
 
@@ -189,4 +191,5 @@ class TicketHandlerAgent:
                 **state.get("sub_results", {}),
                 "ticket_handler": result,
             },
+            "trace": add_trace({**state, "trace": trace}, "ticket_handler", "complete", "Ticket workflow completed"),
         }
