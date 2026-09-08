@@ -7,11 +7,14 @@ from __future__ import annotations
 import os
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from agents.supervisor import create_supervisor_graph
@@ -108,6 +111,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+if FRONTEND_DIR.exists():
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def frontend_app():
+    """Serve the bundled full-stack web UI."""
+    index_file = FRONTEND_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    return {"message": "Campus Customer Service API", "docs": "/docs"}
+
+
+@app.get("/api/config")
+async def get_config():
+    """Expose non-secret runtime information for the frontend."""
+    provider = os.getenv("LLM_PROVIDER", "deepseek").lower()
+    api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
+    configured = bool(api_key) and not api_key.startswith(("local-", "sk-your-"))
+    return {
+        "provider": provider,
+        "model": os.getenv("MODEL_NAME", "deepseek-chat" if provider == "deepseek" else "gpt-4o-mini"),
+        "configured": configured,
+    }
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -120,6 +149,7 @@ class ChatResponse(BaseModel):
     session_id: str
     intent: str
     compliance_passed: bool
+    trace: list[dict[str, str]]
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -144,6 +174,7 @@ async def chat(request: ChatRequest):
         "final_response": "",
         "current_agent": "",
         "retry_count": 0,
+        "trace": [],
     }
 
     config = {"configurable": {"thread_id": session_id}}
@@ -162,6 +193,7 @@ async def chat(request: ChatRequest):
         session_id=session_id,
         intent=result.get("intent", "unknown"),
         compliance_passed=result.get("compliance_passed", True),
+        trace=result.get("trace", []),
     )
 
 

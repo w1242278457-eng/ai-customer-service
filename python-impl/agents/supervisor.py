@@ -7,12 +7,12 @@ from __future__ import annotations
 from typing import Annotated, Any, Optional, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
 from agents.compliance_checker import ComplianceCheckerAgent
+from agents.general_chat import GeneralChatAgent
 from agents.intent_router import IntentRouterAgent
 from agents.knowledge_rag import KnowledgeRAGAgent
 from agents.ticket_handler import TicketHandlerAgent
@@ -20,6 +20,8 @@ from memory.long_term import LongTermMemory
 from memory.short_term import ShortTermMemory
 from memory.working_memory import WorkingMemory
 from tracing.otel_config import trace_agent_call
+from llm_client import OpenAICompatibleChatModel, create_chat_model
+from trace_utils import add_trace
 
 
 class AgentState(TypedDict):
@@ -34,6 +36,7 @@ class AgentState(TypedDict):
     final_response: str
     current_agent: str
     retry_count: int
+    trace: list[dict[str, str]]
 
 
 SUPERVISOR_SYSTEM_PROMPT = """你是校园智能客服系统的 Supervisor。
@@ -56,7 +59,7 @@ SUPERVISOR_SYSTEM_PROMPT = """你是校园智能客服系统的 Supervisor。
 class SupervisorNode:
     """Supervisor 决策节点。"""
 
-    def __init__(self, llm: ChatOpenAI, working_memory: WorkingMemory):
+    def __init__(self, llm: OpenAICompatibleChatModel, working_memory: WorkingMemory):
         self.llm = llm
         self.working_memory = working_memory
 
@@ -66,6 +69,38 @@ class SupervisorNode:
         messages = state["messages"]
         session_id = state.get("session_id", "default")
         context = self.working_memory.get_context(session_id)
+        user_message = str(messages[-1].content).strip().lower()
+        trace = add_trace(state, "supervisor", "thinking", "Analyzing the request and selecting an agent")
+
+        casual_inputs = (
+            "\u4f60\u662f\u8c01", "\u4f60\u662f\u4ec0\u4e48", "\u4ecb\u7ecd\u4e00\u4e0b\u4f60\u81ea\u5df1",
+            "\u4f60\u597d", "\u55e8", "hello", "hi", "\u4f60\u80fd\u505a\u4ec0\u4e48", "\u4f60\u4f1a\u4ec0\u4e48",
+        )
+        if any(item in user_message for item in casual_inputs):
+            intent = "general_chat"
+            self.working_memory.update(session_id, {"last_intent": intent})
+            trace = add_trace({**state, "trace": trace}, "supervisor", "switch", "Switched to general_chat")
+            return {**state, "intent": intent, "current_agent": "supervisor", "trace": trace}
+
+        # Use deterministic routing for the supported campus workflows. Everything
+        # else remains an open-ended conversation instead of failing RAG lookup.
+        ticket_terms = (
+            "\u62a5\u4fee", "\u6302\u5931", "\u8865\u529e", "\u5de5\u5355", "\u6295\u8bc9",
+            "\u4eba\u5de5", "\u6f0f\u6c34", "\u5bbf\u820d\u6545\u969c", "\u6821\u56ed\u5361\u4e22\u5931",
+        )
+        knowledge_terms = (
+            "\u9009\u8bfe", "\u8bfe\u7a0b", "\u8003\u8bd5", "\u6210\u7ee9", "\u5b66\u7c4d",
+            "\u5956\u5b66\u91d1", "\u52a9\u5b66\u91d1", "\u6821\u56ed\u5361", "\u56fe\u4e66\u9986", "\u62a5\u5230",
+        )
+        if any(term in user_message for term in ticket_terms):
+            intent = "ticket_handler"
+        elif any(term in user_message for term in knowledge_terms):
+            intent = "knowledge_rag"
+        else:
+            intent = "general_chat"
+        self.working_memory.update(session_id, {"last_intent": intent})
+        trace = add_trace({**state, "trace": trace}, "supervisor", "switch", f"Switched to {intent}")
+        return {**state, "intent": intent, "current_agent": "supervisor", "trace": trace}
 
         routing_prompt = [
             SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT),
@@ -81,9 +116,9 @@ class SupervisorNode:
         response = await self.llm.ainvoke(routing_prompt)
         intent = response.content.strip().lower()
 
-        valid_intents = {"knowledge_rag", "ticket_handler", "compliance_checker"}
+        valid_intents = {"knowledge_rag", "ticket_handler", "compliance_checker", "general_chat"}
         if intent not in valid_intents:
-            intent = "knowledge_rag"
+            intent = "general_chat"
 
         self.working_memory.update(session_id, {"last_intent": intent})
 
@@ -98,6 +133,7 @@ class SupervisorNode:
         """汇总子 Agent 结果并生成最终回复。"""
         sub_results = state.get("sub_results", {})
         compliance_passed = state.get("compliance_passed", True)
+        trace = add_trace(state, "supervisor", "thinking", "Combining agent results into the final response")
 
         if not compliance_passed:
             final_response = (
@@ -120,6 +156,7 @@ class SupervisorNode:
             **state,
             "final_response": final_response,
             "messages": [AIMessage(content=final_response)],
+            "trace": add_trace({**state, "trace": trace}, "supervisor", "complete", "Response ready"),
         }
 
 
@@ -130,12 +167,13 @@ def route_to_agent(state: AgentState) -> str:
         "knowledge_rag": "knowledge_rag",
         "ticket_handler": "ticket_handler",
         "compliance_checker": "compliance_check",
+        "general_chat": "general_chat",
     }
     return route_map.get(intent, "knowledge_rag")
 
 
 def create_supervisor_graph(
-    llm: Optional[ChatOpenAI] = None,
+    llm: Optional[OpenAICompatibleChatModel] = None,
     working_memory: Optional[WorkingMemory] = None,
     short_term_memory: Optional[ShortTermMemory] = None,
     long_term_memory: Optional[LongTermMemory] = None,
@@ -145,12 +183,7 @@ def create_supervisor_graph(
     import os
 
     if llm is None:
-        llm = ChatOpenAI(
-            model=os.getenv("MODEL_NAME", "gpt-4o"),
-            temperature=0,
-            base_url=os.getenv("OPENAI_BASE_URL"),
-            api_key=os.getenv("OPENAI_API_KEY"),
-        )
+        llm = create_chat_model()
     if working_memory is None:
         working_memory = WorkingMemory()
 
@@ -160,6 +193,7 @@ def create_supervisor_graph(
     knowledge_agent = KnowledgeRAGAgent(llm, long_term_memory)
     ticket_agent = TicketHandlerAgent(llm)
     compliance_agent = ComplianceCheckerAgent(llm)
+    general_chat_agent = GeneralChatAgent(llm)
 
     graph = StateGraph(AgentState)
 
@@ -167,6 +201,7 @@ def create_supervisor_graph(
     graph.add_node("knowledge_rag", knowledge_agent.process)
     graph.add_node("ticket_handler", ticket_agent.process)
     graph.add_node("compliance_check", compliance_agent.process)
+    graph.add_node("general_chat", general_chat_agent.process)
     graph.add_node("synthesize", supervisor.synthesize_response)
 
     graph.set_entry_point("supervisor_route")
@@ -177,11 +212,13 @@ def create_supervisor_graph(
             "knowledge_rag": "knowledge_rag",
             "ticket_handler": "ticket_handler",
             "compliance_check": "compliance_check",
+            "general_chat": "general_chat",
         },
     )
 
     graph.add_edge("knowledge_rag", "compliance_check")
     graph.add_edge("ticket_handler", "compliance_check")
+    graph.add_edge("general_chat", "compliance_check")
     graph.add_edge("compliance_check", "synthesize")
     graph.add_edge("synthesize", END)
 

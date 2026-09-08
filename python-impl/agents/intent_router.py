@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from llm_client import OpenAICompatibleChatModel as ChatOpenAI
 
 from tracing.otel_config import trace_agent_call
 

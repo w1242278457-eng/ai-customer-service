@@ -7,10 +7,11 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from llm_client import OpenAICompatibleChatModel as ChatOpenAI
 
 from memory.long_term import LongTermMemory
 from tracing.otel_config import trace_agent_call
+from trace_utils import add_trace
 
 
 RAG_SYSTEM_PROMPT = """你是校园知识库问答 Agent，负责根据检索到的文档回答用户问题。
@@ -106,6 +107,7 @@ class KnowledgeRAGAgent:
             return state
 
         original_query = messages[-1].content
+        trace = add_trace(state, "knowledge_rag", "thinking", "Searching the campus knowledge base")
         rewritten_query = await self.rewrite_query(original_query)
         raw_docs = await self.retrieve_documents(rewritten_query, top_k=5)
         reranked_docs = await self.rerank_documents(rewritten_query, raw_docs, top_k=3)
@@ -117,4 +119,5 @@ class KnowledgeRAGAgent:
                 **state.get("sub_results", {}),
                 "knowledge_rag": answer,
             },
+            "trace": add_trace({**state, "trace": trace}, "knowledge_rag", "complete", f"Retrieved {len(reranked_docs)} relevant documents"),
         }
